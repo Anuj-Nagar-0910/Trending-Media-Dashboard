@@ -1,0 +1,180 @@
+{
+  "name": "Trending Media Dashboard",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        -260
+      ],
+      "id": "17998bbd-31e9-4414-9960-4cb531fc103c",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "https://api.pexels.com/videos/popular",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "[\n  {\n\"name\": \"per_page\",\n\"value\": \"10\"\n},\n{\n\"name\": \"min_duration\",\n\"value\": \"30\"\n},\n{\n\"name\": \"max_duration\",\n\"value\": \"120\"\n}\n]",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -340,
+        -260
+      ],
+      "id": "8834e521-6c5b-4817-8df3-b40110703dfe",
+      "name": "Fetch Videos (Pexels)",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "X03qgfj2LUbfdwE5",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={YOUR_GOOGLE_API_KEY}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": \"Analyze the following video and sound data. Provide a short, catchy description (max 20 words) and 5 relevant keywords. Video URL: {{ $json.video_url }}, Photographer: {{ $json.video_photographer }}.\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"responseMimeType\": \"application/json\",\n    \"responseSchema\": {\n      \"type\": \"OBJECT\",\n      \"properties\": {\n        \"description\": { \"type\": \"STRING\" },\n        \"keywords\": {\n          \"type\": \"ARRAY\",\n          \"items\": { \"type\": \"STRING\" }\n        }\n      },\n      \"propertyOrdering\": [\"description\", \"keywords\"]\n    }\n  }\n}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 60000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        80,
+        -40
+      ],
+      "id": "cbc34a02-52fb-4563-acde-70b683b457f1",
+      "name": "AI Agent (Gemini)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfor (const item of items) {\n  try {\n    const raw = item.json.candidates[0].content.parts[0].text;\n    const parsed = JSON.parse(raw);\n    item.json.ai_description = parsed.description || \"\";\n    item.json.ai_keywords = Array.isArray(parsed.keywords) ? parsed.keywords.join(', ') : \"\";\n  } catch {\n    item.json.ai_description = \"Error parsing\";\n    item.json.ai_keywords = \"\";\n  }\n}\n\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        -320
+      ],
+      "id": "186602af-ad3e-48aa-9aaf-65819b6f7652",
+      "name": "Extract AI Response"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import io\nimport csv\nfrom datetime import datetime\n\n# Get the input items from the previous node.\n# In some n8n Python Code node environments, 'items' is directly available as a global variable.\n# If this still fails, your n8n setup might be highly customized or an older version.\n# items = get_input_data() # Removed this line\n# items = self.get_input_data() # Removed this line\n# The 'items' variable is assumed to be provided by the n8n environment directly.\n\n# --- Debugging: Print the number of items received ---\n# This will show up in your n8n console/logs if the workflow is executed\n# If you are running n8n in Docker, check 'docker logs <your_n8n_container_name>'\nprint(f\"Received {len(items)} items for CSV generation.\")\nif not items:\n    print(\"No items received. CSV will be empty.\")\n    # Return an empty list if no items, to prevent errors further down\n    return []\n\n\n# Define CSV headers\nheaders = [\n    \"video_id\", \"video_url\", \"video_thumbnail\", \"video_duration\",\n    \"video_photographer\", \"ai_description\", \"ai_keywords\", \"timestamp\"\n]\n\n# Create an in-memory text buffer to write CSV data\noutput_buffer = io.StringIO()\nwriter = csv.writer(output_buffer)\n\n# Write headers\nwriter.writerow(headers)\n\n# Write data rows\nfor item in items: # 'items' is now expected to be available globally\n    row = []\n    for header in headers:\n        if header == 'timestamp':\n            row.append(datetime.utcnow().isoformat() + 'Z')\n        else:\n            # Access data from the 'json' property of the n8n item\n            # Use .get() with a default empty string to handle missing keys gracefully\n            # Ensure 'json' key exists before accessing its properties\n            json_data = item.get('json', {})\n            row.append(json_data.get(header, ''))\n    writer.writerow(row)\n\n# Get the full CSV string from the buffer\ncsv_string = output_buffer.getvalue()\n\n# --- Debugging: Print the first few lines of the generated CSV string ---\nprint(\"Generated CSV (first 5 lines):\")\nprint('\\n'.join(csv_string.splitlines()[:6]))\n\n\n# --- MODIFIED PART: Return as plain text in JSON output ---\n\n# Return the CSV string as a property within the JSON output\nreturn [{\n  'json': {\n    'csv_data': csv_string # The CSV content will be in the 'csv_data' property\n  }\n}]\n\n# --- END OF MODIFIED PART ---"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        -40
+      ],
+      "id": "3e6d7dfa-49ce-4454-820b-9d47806b7c1e",
+      "name": "Generate CSV"
+    },
+    {
+      "parameters": {
+        "jsCode": "const videos = $input.first().json.videos;\nconst formatted = [];\n\nfor (const video of videos) {\n  const videoUrl = video.video_files?.[0]?.link || '';\n  formatted.push({\n    video_id: video.id,\n    video_url: videoUrl,\n    video_thumbnail: video.image,\n    video_duration: video.duration,\n    video_photographer: video.user?.name || \"\",\n    ai_description: \"\",\n    ai_keywords: \"\"\n  });\n}\n\nreturn formatted;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -120,
+        -340
+      ],
+      "id": "347ff758-2e7d-4a9e-abe5-2b37bd2d941a",
+      "name": "Prepare Data for AI"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Fetch Videos (Pexels)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Videos (Pexels)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data for AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Extract AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract AI Response": {
+      "main": [
+        [
+          {
+            "node": "Generate CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data for AI": {
+      "main": [
+        [
+          {
+            "node": "AI Agent (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate CSV": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2fde1b13-365f-4c05-895d-6ac5f332a824",
+  "meta": {
+    "instanceId": "558d88703fb65b2d0e44613bc35916258b0f0bf983c5d4730c00c424b77ca36a"
+  },
+  "id": "WxOtnGay17llgJSn",
+  "tags": []
+}
